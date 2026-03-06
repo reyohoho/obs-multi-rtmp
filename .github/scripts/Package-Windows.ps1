@@ -98,6 +98,14 @@ function Package {
     $NsiFile = "${ProjectRoot}/installer.nsi"
     Log-Information 'Creating NSIS installer...'
 
+    # installer.nsi expects release\Release\obs-multi-rtmp
+    $ReleaseDir = "${ProjectRoot}/release/Release"
+    $SourceDir = "${ProjectRoot}/release/${Configuration}/${ProductName}"
+    if ( (Test-Path $SourceDir) ) {
+        New-Item -ItemType Directory -Force -Path $ReleaseDir | Out-Null
+        Copy-Item -Recurse -Force $SourceDir "${ReleaseDir}/${ProductName}"
+    }
+
     Push-Location -Stack BuildTemp
     Ensure-Location -Path "${ProjectRoot}/release"
     Invoke-External "makensis.exe" ${NsiFile}
