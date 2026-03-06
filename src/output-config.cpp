@@ -41,6 +41,7 @@ static nlohmann::json SaveVideoConfig(VideoEncoderConfig& config) {
     json["param"] = config.encoderParams;
     if (config.outputScene.has_value())
         json["scene"] = *config.outputScene;
+    json["scene-mirror-program"] = config.outputSceneMirrorProgram;
     if (config.resolution.has_value())
         json["resolution"] = *config.resolution;
     json["fps-denumerator"] = config.fpsDenumerator;
@@ -144,6 +145,7 @@ static VideoEncoderConfigPtr LoadVideoConfig(nlohmann::json& json) {
     config->id = *id;
     config->encoderId = GetJsonField<std::string>(json, "encoder").value_or("");
     config->outputScene = GetJsonField<std::string>(json, "scene");
+    config->outputSceneMirrorProgram = GetJsonField<bool>(json, "scene-mirror-program").value_or(false);
     config->resolution = GetJsonField<std::string>(json, "resolution");
     config->fpsDenumerator = GetJsonField<int>(json, "fps-denumerator").value_or(1);
     config->encoderParams = GetJsonField<nlohmann::json>(json, "param").value_or(nlohmann::json{});

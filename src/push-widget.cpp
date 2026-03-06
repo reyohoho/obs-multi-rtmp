@@ -7,8 +7,10 @@
 #include "edit-widget.h"
 #include "output-config.h"
 #include "protocols.h"
+#include "scene-bypass-source.h"
 
 #include "obs.hpp"
+#include <obs-frontend-api.h>
 
 class IOBSOutputEventHanlder
 {
@@ -117,6 +119,8 @@ class PushWidgetImpl : public PushWidget, public IOBSOutputEventHanlder
     bool using_main_video_encoder_ = false;
     bool using_main_audio_encoder_ = false;
     obs_view_t* scene_view_ = 0;
+    obs_scene_t* bypass_scene_ = nullptr;
+    obs_source_t* bypass_source_ = nullptr;
     bool isUseDelay_ = false;
 
 
@@ -186,8 +190,41 @@ class PushWidgetImpl : public PushWidget, public IOBSOutputEventHanlder
             }
             auto videoConfig = FindById(GlobalMultiOutputConfig().videoConfig, config_->videoConfig.value_or(""));
 
-            if (!videoConfig || !videoConfig->outputScene.has_value()) {
+            if (!videoConfig || (!videoConfig->outputScene.has_value() && !videoConfig->outputSceneMirrorProgram)) {
                 obs_encoder_set_video(venc, obs_get_video());
+            } else if (videoConfig->outputSceneMirrorProgram) {
+                ReleaseOutputSceneView();
+
+                OBSSourceAutoRelease programScene = obs_frontend_get_current_scene();
+                if (!programScene) {
+                    blog(LOG_ERROR, TAG "Cannot get current program scene for mirror.");
+                    return false;
+                }
+
+                std::string bypassName = "multi_rtmp_bypass_" + targetid_;
+                bypass_source_ = scene_bypass_source_create(bypassName.c_str());
+                if (!bypass_source_) {
+                    blog(LOG_ERROR, TAG "Failed to create scene bypass source.");
+                    return false;
+                }
+                obs_source_set_hidden(bypass_source_, true);
+                scene_bypass_set_target(bypass_source_, programScene);
+
+                bypass_scene_ = obs_scene_create_private(bypassName.c_str());
+                if (!bypass_scene_) {
+                    obs_source_release(bypass_source_);
+                    bypass_source_ = nullptr;
+                    blog(LOG_ERROR, TAG "Failed to create bypass scene.");
+                    return false;
+                }
+                obs_scene_add(bypass_scene_, bypass_source_);
+
+                obs_source_t* sceneSource = obs_scene_get_source(bypass_scene_);
+                scene_view_ = obs_view_create();
+                obs_view_set_source(scene_view_, 0, sceneSource);
+                obs_source_inc_active(sceneSource);
+                auto scene_video = obs_view_add(scene_view_);
+                obs_encoder_set_video(venc, scene_video);
             } else {
                 auto sceneName = *videoConfig->outputScene;
                 OBSSourceAutoRelease scene = obs_get_source_by_name(sceneName.c_str());
@@ -241,6 +278,15 @@ class PushWidgetImpl : public PushWidget, public IOBSOutputEventHanlder
         obs_view_set_source(scene_view_, 0, nullptr);
         obs_view_destroy(scene_view_);
         scene_view_ = nullptr;
+
+        if (bypass_source_) {
+            obs_source_release(bypass_source_);
+            bypass_source_ = nullptr;
+        }
+        if (bypass_scene_) {
+            obs_scene_release(bypass_scene_);
+            bypass_scene_ = nullptr;
+        }
 
         return true;
     }
@@ -696,7 +742,14 @@ public:
    
     void OnOBSEvent(obs_frontend_event ev) override
     {
-        if (ev == obs_frontend_event::OBS_FRONTEND_EVENT_EXIT
+        if (ev == obs_frontend_event::OBS_FRONTEND_EVENT_SCENE_CHANGED) {
+            if (bypass_source_ && output_ && obs_output_active(output_)) {
+                OBSSourceAutoRelease programScene = obs_frontend_get_current_scene();
+                if (programScene) {
+                    scene_bypass_set_target(bypass_source_, programScene);
+                }
+            }
+        } else if (ev == obs_frontend_event::OBS_FRONTEND_EVENT_EXIT
             || ev == obs_frontend_event::OBS_FRONTEND_EVENT_PROFILE_CHANGED
             || ev == obs_frontend_event::OBS_FRONTEND_EVENT_PROFILE_LIST_CHANGED
         ) {

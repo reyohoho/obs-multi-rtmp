@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 
 #include <list>
 #include <regex>
@@ -6,8 +6,8 @@
 
 #include "push-widget.h"
 #include "plugin-support.h"
-
 #include "output-config.h"
+#include "scene-bypass-source.h"
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -252,6 +252,8 @@ bool obs_module_load()
     }
 
     blog(LOG_INFO, TAG "version: %s by SoraYuki https://github.com/sorayuki/obs-multi-rtmp/", PLUGIN_VERSION);
+
+    register_scene_bypass_source();
 
     obs_frontend_add_event_callback(
         [](enum obs_frontend_event event, void *private_data) {

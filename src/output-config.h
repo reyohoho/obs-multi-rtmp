@@ -15,6 +15,7 @@ struct VideoEncoderConfig {
     int fpsDenumerator = 1;
     nlohmann::json encoderParams;
     std::optional<std::string> outputScene;
+    bool outputSceneMirrorProgram = false;
     std::optional<std::string> resolution;
 };
 using VideoEncoderConfigPtr = std::shared_ptr<VideoEncoderConfig>;
