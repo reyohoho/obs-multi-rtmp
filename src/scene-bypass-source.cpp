@@ -1,6 +1,7 @@
 #include "pch.h"
 #include <obs-module.h>
 #include <obs-frontend-api.h>
+#include <vector>
 
 #define SCENE_BYPASS_SOURCE_ID "multi_rtmp_scene_bypass"
 #define SETTING_TARGET "target_source"
@@ -9,6 +10,35 @@ struct scene_bypass_source {
 	obs_source_t *source;
 	obs_weak_source_t *target;
 };
+
+struct FilterRecord {
+	obs_source_t *filter;
+	bool was_enabled;
+};
+
+static void collect_filter_cb(obs_source_t *parent, obs_source_t *filter, void *param)
+{
+	UNUSED_PARAMETER(parent);
+	auto *records = static_cast<std::vector<FilterRecord> *>(param);
+	records->push_back({filter, obs_source_enabled(filter)});
+}
+
+static bool collect_scene_item_filters(obs_scene_t *scene, obs_sceneitem_t *item, void *param)
+{
+	UNUSED_PARAMETER(scene);
+	obs_source_t *source = obs_sceneitem_get_source(item);
+	if (!source)
+		return true;
+
+	obs_source_enum_filters(source, collect_filter_cb, param);
+
+	// Recurse into nested scenes
+	obs_scene_t *nested = obs_scene_from_source(source);
+	if (nested)
+		obs_scene_enum_items(nested, collect_scene_item_filters, param);
+
+	return true;
+}
 
 static const char *scene_bypass_name(void *unused)
 {
@@ -61,7 +91,30 @@ static void scene_bypass_video_render(void *data, gs_effect_t *effect)
 		return;
 	}
 
-	obs_source_default_render(target);
+	// Collect filters in a separate pass from disabling them.  This ensures
+	// obs_source_set_enabled is never called while the parent source's
+	// filter_mutex is still held by obs_source_enum_filters, which could
+	// otherwise deadlock if a signal handler re-enters the same mutex.
+	std::vector<FilterRecord> filter_states;
+
+	// Collect filters on the scene source itself (scene-level filters).
+	obs_source_enum_filters(target, collect_filter_cb, &filter_states);
+
+	// Collect filters on every source inside the scene (and nested scenes).
+	obs_scene_t *scene = obs_scene_from_source(target);
+	if (scene)
+		obs_scene_enum_items(scene, collect_scene_item_filters, &filter_states);
+
+	// Disable all collected filters so they are skipped during rendering.
+	for (auto &rec : filter_states)
+		obs_source_set_enabled(rec.filter, false);
+
+	obs_source_video_render(target);
+
+	// Restore every filter to its original enabled state.
+	for (auto &rec : filter_states)
+		obs_source_set_enabled(rec.filter, rec.was_enabled);
+
 	obs_source_release(target);
 }
 
