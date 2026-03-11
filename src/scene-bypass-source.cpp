@@ -9,6 +9,7 @@
 struct scene_bypass_source {
 	obs_source_t *source;
 	obs_weak_source_t *target;
+	gs_texrender_t *texrender;
 };
 
 struct FilterRecord {
@@ -23,19 +24,101 @@ static void collect_filter_cb(obs_source_t *parent, obs_source_t *filter, void *
 	records->push_back({filter, obs_source_enabled(filter)});
 }
 
-static bool collect_scene_item_filters(obs_scene_t *scene, obs_sceneitem_t *item, void *param)
+static void render_source_without_filters(obs_source_t *source)
+{
+	uint32_t flags = obs_source_get_output_flags(source);
+
+	if (flags & OBS_SOURCE_ASYNC) {
+		std::vector<FilterRecord> filters;
+		obs_source_enum_filters(source, collect_filter_cb, &filters);
+		for (auto &rec : filters)
+			obs_source_set_enabled(rec.filter, false);
+		obs_source_video_render(source);
+		for (auto &rec : filters)
+			obs_source_set_enabled(rec.filter, rec.was_enabled);
+	} else {
+		obs_source_default_render(source);
+	}
+}
+
+static bool render_item_no_filters(obs_scene_t *scene, obs_sceneitem_t *item, void *param)
 {
 	UNUSED_PARAMETER(scene);
+	auto *texrender = static_cast<gs_texrender_t *>(param);
+
+	if (!obs_sceneitem_visible(item))
+		return true;
+
 	obs_source_t *source = obs_sceneitem_get_source(item);
 	if (!source)
 		return true;
 
-	obs_source_enum_filters(source, collect_filter_cb, param);
+	uint32_t w = obs_source_get_width(source);
+	uint32_t h = obs_source_get_height(source);
+	if (w == 0 || h == 0)
+		return true;
 
-	// Recurse into nested scenes
 	obs_scene_t *nested = obs_scene_from_source(source);
-	if (nested)
-		obs_scene_enum_items(nested, collect_scene_item_filters, param);
+	if (nested) {
+		struct matrix4 transform;
+		obs_sceneitem_get_draw_transform(item, &transform);
+		gs_matrix_push();
+		gs_matrix_mul(&transform);
+		obs_scene_enum_items(nested, render_item_no_filters, param);
+		gs_matrix_pop();
+		return true;
+	}
+
+	struct obs_sceneitem_crop crop;
+	obs_sceneitem_get_crop(item, &crop);
+	bool has_crop = crop.left || crop.top || crop.right || crop.bottom;
+
+	struct matrix4 transform;
+	obs_sceneitem_get_draw_transform(item, &transform);
+
+	gs_matrix_push();
+	gs_matrix_mul(&transform);
+
+	if (has_crop && texrender) {
+		uint32_t crop_w = w - crop.left - crop.right;
+		uint32_t crop_h = h - crop.top - crop.bottom;
+
+		gs_texrender_reset(texrender);
+		if (gs_texrender_begin(texrender, crop_w, crop_h)) {
+			struct vec4 clear_val;
+			vec4_zero(&clear_val);
+			gs_clear(GS_CLEAR_COLOR, &clear_val, 1.0f, 0);
+
+			gs_matrix_push();
+			gs_matrix_translate3f(-(float)crop.left,
+					     -(float)crop.top, 0.0f);
+			render_source_without_filters(source);
+			gs_matrix_pop();
+
+			gs_texrender_end(texrender);
+		}
+
+		gs_texture_t *tex = gs_texrender_get_texture(texrender);
+		if (tex) {
+			gs_effect_t *eff =
+				obs_get_base_effect(OBS_EFFECT_DEFAULT);
+			gs_eparam_t *img =
+				gs_effect_get_param_by_name(eff, "image");
+			gs_effect_set_texture(img, tex);
+
+			gs_technique_t *tech =
+				gs_effect_get_technique(eff, "Draw");
+			gs_technique_begin(tech);
+			gs_technique_begin_pass(tech, 0);
+			gs_draw_sprite(tex, 0, crop_w, crop_h);
+			gs_technique_end_pass(tech);
+			gs_technique_end(tech);
+		}
+	} else {
+		render_source_without_filters(source);
+	}
+
+	gs_matrix_pop();
 
 	return true;
 }
@@ -69,6 +152,7 @@ static void *scene_bypass_create(obs_data_t *settings, obs_source_t *source)
 {
 	auto *s = static_cast<scene_bypass_source *>(bzalloc(sizeof(scene_bypass_source)));
 	s->source = source;
+	s->texrender = nullptr;
 	scene_bypass_update(s, settings);
 	return s;
 }
@@ -78,6 +162,11 @@ static void scene_bypass_destroy(void *data)
 	auto *s = static_cast<scene_bypass_source *>(data);
 	if (s->target)
 		obs_weak_source_release(s->target);
+	if (s->texrender) {
+		obs_enter_graphics();
+		gs_texrender_destroy(s->texrender);
+		obs_leave_graphics();
+	}
 	bfree(s);
 }
 
@@ -87,33 +176,16 @@ static void scene_bypass_video_render(void *data, gs_effect_t *effect)
 	auto *s = static_cast<scene_bypass_source *>(data);
 
 	obs_source_t *target = s->target ? obs_weak_source_get_source(s->target) : nullptr;
-	if (!target) {
+	if (!target)
 		return;
-	}
 
-	// Collect filters in a separate pass from disabling them.  This ensures
-	// obs_source_set_enabled is never called while the parent source's
-	// filter_mutex is still held by obs_source_enum_filters, which could
-	// otherwise deadlock if a signal handler re-enters the same mutex.
-	std::vector<FilterRecord> filter_states;
+	if (!s->texrender)
+		s->texrender = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 
-	// Collect filters on the scene source itself (scene-level filters).
-	obs_source_enum_filters(target, collect_filter_cb, &filter_states);
-
-	// Collect filters on every source inside the scene (and nested scenes).
 	obs_scene_t *scene = obs_scene_from_source(target);
 	if (scene)
-		obs_scene_enum_items(scene, collect_scene_item_filters, &filter_states);
-
-	// Disable all collected filters so they are skipped during rendering.
-	for (auto &rec : filter_states)
-		obs_source_set_enabled(rec.filter, false);
-
-	obs_source_video_render(target);
-
-	// Restore every filter to its original enabled state.
-	for (auto &rec : filter_states)
-		obs_source_set_enabled(rec.filter, rec.was_enabled);
+		obs_scene_enum_items(scene, render_item_no_filters,
+				     s->texrender);
 
 	obs_source_release(target);
 }
