@@ -1,7 +1,6 @@
 #include "pch.h"
 #include <obs-module.h>
 #include <obs-frontend-api.h>
-#include <graphics/matrix4.h>
 #include <vector>
 
 #define SCENE_BYPASS_SOURCE_ID "multi_rtmp_scene_bypass"
@@ -10,7 +9,6 @@
 struct scene_bypass_source {
 	obs_source_t *source;
 	obs_weak_source_t *target;
-	gs_texrender_t *texrender;
 };
 
 struct FilterRecord {
@@ -25,93 +23,18 @@ static void collect_filter_cb(obs_source_t *parent, obs_source_t *filter, void *
 	records->push_back({filter, obs_source_enabled(filter)});
 }
 
-static void render_source_without_filters(obs_source_t *source)
-{
-	std::vector<FilterRecord> filters;
-	obs_source_enum_filters(source, collect_filter_cb, &filters);
-
-	for (auto &rec : filters)
-		obs_source_set_enabled(rec.filter, false);
-
-	obs_source_video_render(source);
-
-	for (auto &rec : filters)
-		obs_source_set_enabled(rec.filter, rec.was_enabled);
-}
-
-static bool render_item_no_filters(obs_scene_t *scene, obs_sceneitem_t *item, void *param)
+static bool collect_scene_item_filters(obs_scene_t *scene, obs_sceneitem_t *item, void *param)
 {
 	UNUSED_PARAMETER(scene);
-	auto *texrender = static_cast<gs_texrender_t *>(param);
-
-	if (!obs_sceneitem_visible(item))
-		return true;
-
 	obs_source_t *source = obs_sceneitem_get_source(item);
 	if (!source)
 		return true;
 
-	uint32_t w = obs_source_get_width(source);
-	uint32_t h = obs_source_get_height(source);
-	if (w == 0 || h == 0)
-		return true;
+	obs_source_enum_filters(source, collect_filter_cb, param);
 
 	obs_scene_t *nested = obs_scene_from_source(source);
-	if (nested) {
-		struct matrix4 transform;
-		obs_sceneitem_get_draw_transform(item, &transform);
-		gs_matrix_push();
-		gs_matrix_mul(&transform);
-		obs_scene_enum_items(nested, render_item_no_filters, param);
-		gs_matrix_pop();
-		return true;
-	}
-
-	struct obs_sceneitem_crop crop;
-	obs_sceneitem_get_crop(item, &crop);
-	uint32_t crop_w = w - crop.left - crop.right;
-	uint32_t crop_h = h - crop.top - crop.bottom;
-	if (crop_w == 0 || crop_h == 0)
-		return true;
-
-	gs_texrender_reset(texrender);
-	if (gs_texrender_begin(texrender, crop_w, crop_h)) {
-		struct vec4 clear_val;
-		vec4_zero(&clear_val);
-		gs_clear(GS_CLEAR_COLOR, &clear_val, 1.0f, 0);
-
-		gs_ortho((float)crop.left, (float)(crop.left + crop_w),
-			 (float)crop.top, (float)(crop.top + crop_h),
-			 -100.0f, 100.0f);
-
-		render_source_without_filters(source);
-
-		gs_texrender_end(texrender);
-	}
-
-	gs_texture_t *tex = gs_texrender_get_texture(texrender);
-	if (tex) {
-		struct matrix4 transform;
-		obs_sceneitem_get_draw_transform(item, &transform);
-
-		gs_matrix_push();
-		gs_matrix_mul(&transform);
-
-		gs_effect_t *eff = obs_get_base_effect(OBS_EFFECT_DEFAULT);
-		gs_eparam_t *img =
-			gs_effect_get_param_by_name(eff, "image");
-		gs_effect_set_texture(img, tex);
-
-		gs_technique_t *tech =
-			gs_effect_get_technique(eff, "Draw");
-		gs_technique_begin(tech);
-		gs_technique_begin_pass(tech, 0);
-		gs_draw_sprite(tex, 0, crop_w, crop_h);
-		gs_technique_end_pass(tech);
-		gs_technique_end(tech);
-
-		gs_matrix_pop();
-	}
+	if (nested)
+		obs_scene_enum_items(nested, collect_scene_item_filters, param);
 
 	return true;
 }
@@ -145,7 +68,6 @@ static void *scene_bypass_create(obs_data_t *settings, obs_source_t *source)
 {
 	auto *s = static_cast<scene_bypass_source *>(bzalloc(sizeof(scene_bypass_source)));
 	s->source = source;
-	s->texrender = nullptr;
 	scene_bypass_update(s, settings);
 	return s;
 }
@@ -155,11 +77,6 @@ static void scene_bypass_destroy(void *data)
 	auto *s = static_cast<scene_bypass_source *>(data);
 	if (s->target)
 		obs_weak_source_release(s->target);
-	if (s->texrender) {
-		obs_enter_graphics();
-		gs_texrender_destroy(s->texrender);
-		obs_leave_graphics();
-	}
 	bfree(s);
 }
 
@@ -172,13 +89,22 @@ static void scene_bypass_video_render(void *data, gs_effect_t *effect)
 	if (!target)
 		return;
 
-	if (!s->texrender)
-		s->texrender = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+	std::vector<FilterRecord> filter_states;
+
+	obs_source_enum_filters(target, collect_filter_cb, &filter_states);
 
 	obs_scene_t *scene = obs_scene_from_source(target);
 	if (scene)
-		obs_scene_enum_items(scene, render_item_no_filters,
-				     s->texrender);
+		obs_scene_enum_items(scene, collect_scene_item_filters,
+				     &filter_states);
+
+	for (auto &rec : filter_states)
+		obs_source_set_enabled(rec.filter, false);
+
+	obs_source_default_render(target);
+
+	for (auto &rec : filter_states)
+		obs_source_set_enabled(rec.filter, rec.was_enabled);
 
 	obs_source_release(target);
 }
