@@ -101,7 +101,7 @@ static void scene_bypass_video_render(void *data, gs_effect_t *effect)
 	for (auto &rec : filter_states)
 		obs_source_set_enabled(rec.filter, false);
 
-	obs_source_default_render(target);
+	obs_source_video_render(target);
 
 	for (auto &rec : filter_states)
 		obs_source_set_enabled(rec.filter, rec.was_enabled);
@@ -172,7 +172,7 @@ obs_source_t *scene_bypass_source_create(const char *name)
 static struct obs_source_info scene_bypass_info = {
 	.id = SCENE_BYPASS_SOURCE_ID,
 	.type = OBS_SOURCE_TYPE_INPUT,
-	.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_SRGB,
+	.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW | OBS_SOURCE_SRGB,
 	.get_name = scene_bypass_name,
 	.create = scene_bypass_create,
 	.destroy = scene_bypass_destroy,
