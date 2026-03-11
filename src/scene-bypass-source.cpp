@@ -1,6 +1,7 @@
 #include "pch.h"
 #include <obs-module.h>
 #include <obs-frontend-api.h>
+#include <graphics/matrix4.h>
 #include <vector>
 
 #define SCENE_BYPASS_SOURCE_ID "multi_rtmp_scene_bypass"
