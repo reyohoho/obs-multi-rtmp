@@ -23,6 +23,7 @@
 #include <QCheckBox>
 #include <QGroupBox>
 #include <QAction>
+#include <QInputDialog>
 
 #include "obs-multi-rtmp.h"
 #include "obs-module.h"

@@ -114,6 +114,7 @@ class PushWidgetImpl : public PushWidget, public IOBSOutputEventHanlder
 
     QPushButton* edit_btn_ = 0;
     QPushButton* remove_btn_ = 0;
+    QPushButton* bitrate_btn_ = 0;
 
     obs_output_t* output_ = 0;
     bool using_main_video_encoder_ = false;
@@ -298,6 +299,43 @@ class PushWidgetImpl : public PushWidget, public IOBSOutputEventHanlder
 
     std::string AudioEncoderName(int track) {
         return "multi-rtmp-aenc" + config_->audioConfig.value_or("") + "-track-idx-" + std::to_string(track);
+    }
+
+    void ChangeBitrate() {
+        if (!output_ || !obs_output_active(output_))
+            return;
+
+        auto venc = obs_output_get_video_encoder(output_);
+        if (!venc)
+            return;
+
+        if (using_main_video_encoder_) {
+            auto res = QMessageBox(QMessageBox::Icon::Warning,
+                obs_module_text("Notice.Title"),
+                obs_module_text("Bitrate.SharedEncoderWarn"),
+                QMessageBox::StandardButton::Yes | QMessageBox::StandardButton::No,
+                this
+            ).exec();
+            if (res != QMessageBox::Yes)
+                return;
+        }
+
+        OBSDataAutoRelease settings = obs_encoder_get_settings(venc);
+        int currentBitrate = (int)obs_data_get_int(settings, "bitrate");
+
+        bool ok;
+        int newBitrate = QInputDialog::getInt(this,
+            obs_module_text("Bitrate.Title"),
+            obs_module_text("Bitrate.Label"),
+            currentBitrate, 100, 500000, 100, &ok);
+
+        if (ok && newBitrate != currentBitrate) {
+            OBSDataAutoRelease newSettings = obs_data_create();
+            obs_data_set_int(newSettings, "bitrate", newBitrate);
+            obs_encoder_update(venc, newSettings);
+            blog(LOG_INFO, TAG "Updated video bitrate from %d to %d kbps for target \"%s\"",
+                currentBitrate, newBitrate, config_->name.c_str());
+        }
     }
 
     std::optional<std::tuple<int, int>> ParseResolution(const std::optional<std::string>& res) {
@@ -605,7 +643,7 @@ public:
         });
 
         auto layout = new QGridLayout(this);
-        layout->addWidget(name_ = new QLabel(obs_module_text("NewStreaming"), this), 0, 0, 1, 3);
+        layout->addWidget(name_ = new QLabel(obs_module_text("NewStreaming"), this), 0, 0, 1, 4);
         layout->addWidget(btn_ = new QPushButton(obs_module_text("Btn.Start"), this), 1, 0);
         QObject::connect(btn_, &QPushButton::clicked, [this]() {
             StartStop();
@@ -617,6 +655,13 @@ public:
         });
 
         layout->addWidget(remove_btn_ = new QPushButton(obs_module_text("Btn.Delete"), this), 1, 2);
+
+        layout->addWidget(bitrate_btn_ = new QPushButton(obs_module_text("Btn.Bitrate"), this), 1, 3);
+        bitrate_btn_->setVisible(false);
+        QObject::connect(bitrate_btn_, &QPushButton::clicked, [this]() {
+            ChangeBitrate();
+        });
+
         QObject::connect(remove_btn_, &QPushButton::clicked, [this]() {
             auto msgbox = new QMessageBox(QMessageBox::Icon::Question,
                 obs_module_text("Question.Title"),
@@ -637,7 +682,7 @@ public:
             }
         });
 
-        layout->addWidget(msg_ = new QLabel(u8"", this), 2, 0, 1, 3);
+        layout->addWidget(msg_ = new QLabel(u8"", this), 2, 0, 1, 4);
         msg_->setWordWrap(true);
         layout->addItem(new QSpacerItem(0, 10), 3, 0);
         setLayout(layout);
@@ -849,6 +894,7 @@ public:
             remove_btn_->setEnabled(false);
             btn_->setText(obs_module_text("Status.Stop"));
             btn_->setEnabled(true);
+            bitrate_btn_->setVisible(true);
             SetMsg(obs_module_text("Status.Streaming"));
 
             ResetInfo();
@@ -874,6 +920,7 @@ public:
             remove_btn_->setEnabled(false);
             btn_->setText(obs_module_text("Status.Stop"));
             btn_->setEnabled(true);
+            bitrate_btn_->setVisible(true);
             SetMsg(obs_module_text("Status.Streaming"));
 
             ResetInfo();
@@ -902,6 +949,7 @@ public:
             remove_btn_->setEnabled(true);
             btn_->setText(obs_module_text("Btn.Start"));
             btn_->setEnabled(true);
+            bitrate_btn_->setVisible(false);
             SetMsg(u8"");
 
             switch(code)
