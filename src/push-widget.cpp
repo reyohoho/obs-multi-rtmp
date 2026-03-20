@@ -899,6 +899,17 @@ public:
 
     void OnStarted() override
     {
+        if (output_) {
+            auto venc = obs_output_get_video_encoder(output_);
+            if (venc) {
+                OBSDataAutoRelease s = obs_encoder_get_settings(venc);
+                blog(LOG_INFO, TAG "Target \"%s\" started. Encoder: %s, settings: %s",
+                    config_->name.c_str(),
+                    obs_encoder_get_id(venc),
+                    obs_data_get_json(s));
+            }
+        }
+
         GetGlobalService().RunInUIThread([this]() {
             remove_btn_->setEnabled(false);
             btn_->setText(obs_module_text("Status.Stop"));
