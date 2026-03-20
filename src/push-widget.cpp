@@ -616,7 +616,16 @@ class PushWidgetImpl : public PushWidget, public IOBSOutputEventHanlder
                 }
             }();
             
-            msg_->setText((std::string(strDuration) + "  " + strBps + "  " + strFps).c_str());
+            std::string strBitrate;
+            auto venc = obs_output_get_video_encoder(output_);
+            if (venc) {
+                OBSDataAutoRelease encSettings = obs_encoder_get_settings(venc);
+                int bitrate = (int)obs_data_get_int(encSettings, "bitrate");
+                if (bitrate > 0)
+                    strBitrate = "  BR:" + std::to_string(bitrate) + " Kbps";
+            }
+
+            msg_->setText((std::string(strDuration) + "  " + strBps + "  " + strFps + strBitrate).c_str());
         }
 
         total_frames_ = new_frames;
