@@ -16,6 +16,7 @@ struct VideoEncoderConfig {
     nlohmann::json encoderParams;
     std::optional<std::string> outputScene;
     bool outputSceneMirrorProgram = false;
+    bool mirrorBypassFilters = true;
     std::optional<std::string> resolution;
 };
 using VideoEncoderConfigPtr = std::shared_ptr<VideoEncoderConfig>;

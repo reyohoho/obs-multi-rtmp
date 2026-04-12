@@ -5,15 +5,18 @@
 
 #define SCENE_BYPASS_SOURCE_ID "multi_rtmp_scene_bypass"
 #define SETTING_TARGET "target_source"
-
-struct scene_bypass_source {
-	obs_source_t *source;
-	obs_weak_source_t *target;
-};
+#define SETTING_BYPASS_FILTERS "bypass_filters"
 
 struct FilterRecord {
 	obs_source_t *filter;
 	bool was_enabled;
+};
+
+struct scene_bypass_source {
+	obs_source_t *source = nullptr;
+	obs_weak_source_t *target = nullptr;
+	bool bypass_filters = true;
+	std::vector<FilterRecord> filter_states;
 };
 
 static void collect_filter_cb(obs_source_t *parent, obs_source_t *filter, void *param)
@@ -62,11 +65,13 @@ static void scene_bypass_update(void *data, obs_data_t *settings)
 			obs_source_release(target);
 		}
 	}
+
+	s->bypass_filters = obs_data_get_bool(settings, SETTING_BYPASS_FILTERS);
 }
 
 static void *scene_bypass_create(obs_data_t *settings, obs_source_t *source)
 {
-	auto *s = static_cast<scene_bypass_source *>(bzalloc(sizeof(scene_bypass_source)));
+	auto *s = new scene_bypass_source{};
 	s->source = source;
 	scene_bypass_update(s, settings);
 	return s;
@@ -77,7 +82,7 @@ static void scene_bypass_destroy(void *data)
 	auto *s = static_cast<scene_bypass_source *>(data);
 	if (s->target)
 		obs_weak_source_release(s->target);
-	bfree(s);
+	delete s;
 }
 
 static void scene_bypass_video_render(void *data, gs_effect_t *effect)
@@ -89,21 +94,27 @@ static void scene_bypass_video_render(void *data, gs_effect_t *effect)
 	if (!target)
 		return;
 
-	std::vector<FilterRecord> filter_states;
+	if (!s->bypass_filters) {
+		obs_source_video_render(target);
+		obs_source_release(target);
+		return;
+	}
 
-	obs_source_enum_filters(target, collect_filter_cb, &filter_states);
+	s->filter_states.clear();
+
+	obs_source_enum_filters(target, collect_filter_cb, &s->filter_states);
 
 	obs_scene_t *scene = obs_scene_from_source(target);
 	if (scene)
 		obs_scene_enum_items(scene, collect_scene_item_filters,
-				     &filter_states);
+				     &s->filter_states);
 
-	for (auto &rec : filter_states)
+	for (auto &rec : s->filter_states)
 		obs_source_set_enabled(rec.filter, false);
 
 	obs_source_video_render(target);
 
-	for (auto &rec : filter_states)
+	for (auto &rec : s->filter_states)
 		obs_source_set_enabled(rec.filter, rec.was_enabled);
 
 	obs_source_release(target);
@@ -151,6 +162,7 @@ static obs_properties_t *scene_bypass_properties(void *data)
 static void scene_bypass_defaults(obs_data_t *settings)
 {
 	obs_data_set_default_string(settings, SETTING_TARGET, "");
+	obs_data_set_default_bool(settings, SETTING_BYPASS_FILTERS, true);
 }
 
 void scene_bypass_set_target(obs_source_t *source, obs_source_t *target)
@@ -163,9 +175,18 @@ void scene_bypass_set_target(obs_source_t *source, obs_source_t *target)
 	obs_data_release(settings);
 }
 
+void scene_bypass_set_bypass_filters(obs_source_t *source, bool bypass)
+{
+	if (!source) return;
+	obs_data_t *settings = obs_data_create();
+	obs_data_set_bool(settings, SETTING_BYPASS_FILTERS, bypass);
+	obs_source_update(source, settings);
+	obs_data_release(settings);
+}
+
 obs_source_t *scene_bypass_source_create(const char *name)
 {
-	obs_source_t *source = obs_source_create(SCENE_BYPASS_SOURCE_ID, name, nullptr, nullptr);
+	obs_source_t *source = obs_source_create_private(SCENE_BYPASS_SOURCE_ID, name, nullptr);
 	return source;
 }
 

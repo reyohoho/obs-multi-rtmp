@@ -209,6 +209,7 @@ class PushWidgetImpl : public PushWidget, public IOBSOutputEventHanlder
                     return false;
                 }
                 obs_source_set_hidden(bypass_source_, true);
+                scene_bypass_set_bypass_filters(bypass_source_, videoConfig->mirrorBypassFilters);
                 scene_bypass_set_target(bypass_source_, programScene);
 
                 bypass_scene_ = obs_scene_create_private(bypassName.c_str());

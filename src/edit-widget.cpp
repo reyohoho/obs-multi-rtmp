@@ -687,6 +687,7 @@ public:
     void LoadScenes()
     {
         v_scene_->addItem(obs_module_text("SameAsOBSScene"), "");
+        v_scene_->addItem(obs_module_text("MirrorProgramWithFilters"), "__MIRROR_PROGRAM_WITH_FILTERS__");
         v_scene_->addItem(obs_module_text("MirrorProgramNoFilters"), "__MIRROR_PROGRAM__");
 
         using EnumParam = std::vector<std::string>;
@@ -809,12 +810,19 @@ public:
         if (sceneData == "__MIRROR_PROGRAM__") {
             it->outputScene.reset();
             it->outputSceneMirrorProgram = true;
-        } else if (v_scene_->currentIndex() > 1) {
+            it->mirrorBypassFilters = true;
+        } else if (sceneData == "__MIRROR_PROGRAM_WITH_FILTERS__") {
+            it->outputScene.reset();
+            it->outputSceneMirrorProgram = true;
+            it->mirrorBypassFilters = false;
+        } else if (!sceneData.isEmpty()) {
             it->outputScene = tostdu8(sceneData);
             it->outputSceneMirrorProgram = false;
+            it->mirrorBypassFilters = false;
         } else {
             it->outputScene.reset();
             it->outputSceneMirrorProgram = false;
+            it->mirrorBypassFilters = false;
         }
         
         auto resolution = v_resolution_->text().toUtf8();
@@ -938,8 +946,14 @@ public:
 
         auto& config = *pconfig;
 
-        if (config.outputSceneMirrorProgram) {
+        if (config.outputSceneMirrorProgram && config.mirrorBypassFilters) {
             auto idx = v_scene_->findData(QString::fromUtf8("__MIRROR_PROGRAM__"));
+            if (idx >= 0)
+                v_scene_->setCurrentIndex(idx);
+            else
+                v_scene_->setCurrentIndex(0);
+        } else if (config.outputSceneMirrorProgram && !config.mirrorBypassFilters) {
+            auto idx = v_scene_->findData(QString::fromUtf8("__MIRROR_PROGRAM_WITH_FILTERS__"));
             if (idx >= 0)
                 v_scene_->setCurrentIndex(idx);
             else
